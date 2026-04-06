@@ -2,7 +2,7 @@
 
 Procedurally generated top-down cityscapes rendered as glowing LED dot-matrix displays. Cities grow outward from a nucleus, filling in with buildings, parks, water, and roads, then settle into a continuous day/night cycle.
 
-**Version 0.1**
+**Version 0.2**
 
 ## Getting Started
 
@@ -57,3 +57,4 @@ The city transitions through a full day/night cycle with dramatic lighting chang
 | Version | Changes |
 |---------|---------|
 | **0.1** | Initial release: two-layer grid system (50x50 blocks, 100x100 LEDs), River City and Sprawl presets, day/night cycle with dusk/dawn, sub-cell fill patterns (courtyards, fountains, paths), growth animation |
+| **0.2** | Visual tuning: noise-distorted city center shape, steeper density gradient with preset-driven density, stronger dusk/dawn golden hour, improved daytime color separation, distinct courtyard/park/path colors |
