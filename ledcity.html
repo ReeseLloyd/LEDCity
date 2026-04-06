@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEDCity v0.5</title>
+<title>LEDCity v0.6</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -635,9 +635,9 @@ function colRoad(day, v, dusk) {
     // Dark pavement at night -- no streetlights (vehicles will provide light)
     return [(6 + 20 * day) | 0, (6 + 18 * day) | 0, (8 + 15 * day) | 0];
   }
-  // Cooler gray to separate from warm buildings
-  const base = 35 + 55 * day + 10 * dusk;
-  return [(base - 5) | 0, (base - 3) | 0, (base + 8) | 0];
+  // Cooler gray to separate from warm buildings -- kept dark for contrast
+  const base = 24 + 39 * day + 7 * dusk;
+  return [(base - 4) | 0, (base - 2) | 0, (base + 6) | 0];
 }
 
 function colPark(day, v, dusk) {
