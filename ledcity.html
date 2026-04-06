@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEDCity v0.7</title>
+<title>LEDCity v0.8</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -783,7 +783,7 @@ function spawnVehicle() {
     type: isTruck ? 1 : 0,
     speed: hw ? 3 : (4 + (Math.random() * 4) | 0),
     tick: 0,
-    color: Math.random() < 0.03 ? 2 : (Math.random() < 0.5 ? 0 : 1), // 0=white, 1=amber, 2=blue
+    color: (Math.random() * 5) | 0, // 0=red, 1=white, 2=blue, 3=yellow, 4=green
   });
 }
 
@@ -861,33 +861,24 @@ function updateVehicles(day, dusk) {
   }
 }
 
+// Vehicle color palette: [r, g, b] base values, brightened at night
+const VEHICLE_COLORS = [
+  [220, 50, 30],   // red
+  [230, 225, 210], // white
+  [60, 100, 220],  // blue
+  [230, 200, 40],  // yellow
+  [50, 200, 80],   // green
+];
+
 function vehicleColor(v, day) {
   const night = day < 0.3 ? 1 - day / 0.3 : 0;
-  const bright = 0.4 + 0.6 * night; // brighter at night
-
-  // Emergency vehicle
-  if (v.color === 2) {
-    return { head: [40 + 180 * bright | 0, 60 + 140 * bright | 0, 180 + 75 * bright | 0],
-             tail: [40 + 180 * bright | 0, 60 + 140 * bright | 0, 180 + 75 * bright | 0] };
-  }
-
-  // Headlight colors
-  let hr, hg, hb;
-  if (v.color === 0) { // warm white
-    hr = 200 + 55 * bright | 0; hg = 190 + 50 * bright | 0; hb = 140 + 40 * bright | 0;
-  } else { // amber
-    hr = 220 + 35 * bright | 0; hg = 170 + 40 * bright | 0; hb = 80 + 30 * bright | 0;
-  }
-
-  // Taillight: red
-  const tr = 180 + 70 * bright | 0;
-  const tg = 20 + 15 * bright | 0;
-  const tb = 10 + 10 * bright | 0;
-
-  return {
-    head: [Math.min(255, hr), Math.min(255, hg), Math.min(255, hb)],
-    tail: [Math.min(255, tr), Math.min(255, tg), Math.min(255, tb)],
-  };
+  const bright = 0.5 + 0.5 * night; // brighter at night
+  const base = VEHICLE_COLORS[v.color];
+  return [
+    Math.min(255, (base[0] * bright) | 0),
+    Math.min(255, (base[1] * bright) | 0),
+    Math.min(255, (base[2] * bright) | 0),
+  ];
 }
 
 function renderVehicleLED(x, y, r, g, b, ambR, ambG, ambB) {
@@ -948,19 +939,14 @@ function render() {
   // Render vehicles on top
   for (let i = 0; i < vehicles.length; i++) {
     const v = vehicles[i];
-    const col = vehicleColor(v, day);
-    const headingAway = v.dir === 0 || v.dir === 3; // N or W = taillights visible
+    const [vr, vg, vb] = vehicleColor(v, day);
 
-    if (v.type === 0) {
-      // Car: single LED
-      const c = headingAway ? col.tail : col.head;
-      renderVehicleLED(v.x, v.y, c[0], c[1], c[2], ambR, ambG, ambB);
-    } else {
-      // Truck: front LED = headlight, back LED = taillight
-      const bx = v.x - DIR_DX[v.dir]; // back position
+    renderVehicleLED(v.x, v.y, vr, vg, vb, ambR, ambG, ambB);
+    if (v.type === 1) {
+      // Truck: second LED behind
+      const bx = v.x - DIR_DX[v.dir];
       const by = v.y - DIR_DY[v.dir];
-      renderVehicleLED(v.x, v.y, col.head[0], col.head[1], col.head[2], ambR, ambG, ambB);
-      renderVehicleLED(bx, by, col.tail[0], col.tail[1], col.tail[2], ambR, ambG, ambB);
+      renderVehicleLED(bx, by, vr, vg, vb, ambR, ambG, ambB);
     }
   }
 

@@ -2,7 +2,7 @@
 
 Procedurally generated top-down cityscapes rendered as glowing LED dot-matrix displays. Cities grow outward from a nucleus, filling in with buildings, parks, water, and roads, then settle into a continuous day/night cycle.
 
-**Version 0.7**
+**Version 0.8**
 
 ## Getting Started
 
@@ -63,3 +63,4 @@ The city transitions through a full day/night cycle with dramatic lighting chang
 | **0.5** | Removed road streetlights at night so roads read as dark channels between lit buildings |
 | **0.6** | Reduced daytime road brightness by 30% for more contrast with surroundings |
 | **0.7** | Vehicle traffic: cars and trucks with headlights/taillights, highway speed detection, time-of-day density scaling |
+| **0.8** | Vehicle color palette: red, white, blue, yellow, green -- replaces directional headlight/taillight system |
