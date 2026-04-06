@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LEDCity</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #05060f;
+  color: #445;
+  font-family: monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  gap: 16px;
+  user-select: none;
+}
+h1 { font-size: 11px; letter-spacing: 4px; color: #222533; text-transform: uppercase; }
+canvas { display: block; }
+.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+select, button {
+  background: #0c0d1a;
+  color: #445;
+  border: 1px solid #191b2e;
+  padding: 5px 14px;
+  font-family: monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  outline: none;
+}
+select:hover, button:hover {
+  background: #131525;
+  color: #6677aa;
+  border-color: #252840;
+}
+button.active {
+  color: #6677aa;
+  border-color: #252840;
+}
+input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 3px;
+  background: #191b2e;
+  outline: none;
+  cursor: pointer;
+  border-radius: 2px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 10px;
+  height: 10px;
+  background: #445;
+  border-radius: 50%;
+  cursor: pointer;
+}
+input[type=range]::-webkit-slider-thumb:hover { background: #6677aa; }
+input[type=range]::-moz-range-thumb {
+  width: 10px; height: 10px;
+  background: #445; border: none; border-radius: 50%; cursor: pointer;
+}
+.speed-label { font-size: 11px; min-width: 38px; }
+.info-label { font-size: 11px; color: #334; min-width: 80px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>LED City</h1>
+<canvas id="c"></canvas>
+<div class="controls">
+  <select id="preset">
+    <option value="river">River City</option>
+    <option value="sprawl">Sprawl</option>
+  </select>
+  <input type="range" id="speed" min="5" max="200" step="5" value="50">
+  <span class="speed-label" id="speedLabel">50%</span>
+  <button id="pauseBtn">&#9208;</button>
+  <button id="btn">&#8634; New City</button>
+  <span class="info-label" id="infoLabel"></span>
+</div>
+
+<script>
+// ── PRNG ─────────────────────────────────────────────────────────────────────
+function mulberry32(seed) {
+  return function() {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = t + Math.imul(t ^ (t >>> 7), 61 | t) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ── Seeded Perlin noise ──────────────────────────────────────────────────────
+class Noise {
+  constructor(seed) {
+    const rng = mulberry32(seed);
+    this.p = new Uint8Array(512);
+    const perm = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) perm[i] = i;
+    for (let i = 255; i > 0; i--) {
+      const j = (rng() * (i + 1)) | 0;
+      [perm[i], perm[j]] = [perm[j], perm[i]];
+    }
+    for (let i = 0; i < 512; i++) this.p[i] = perm[i & 255];
+  }
+  fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+  lerp(a, b, t) { return a + t * (b - a); }
+  grad(hash, x, y) {
+    const h = hash & 3;
+    const u = h < 2 ? x : y, v = h < 2 ? y : x;
+    return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+  }
+  at(x, y) {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    x -= Math.floor(x); y -= Math.floor(y);
+    const u = this.fade(x), v = this.fade(y);
+    const p = this.p;
+    const A = p[X] + Y, B = p[X + 1] + Y;
+    return this.lerp(
+      this.lerp(this.grad(p[A], x, y), this.grad(p[B], x - 1, y), u),
+      this.lerp(this.grad(p[A + 1], x, y - 1), this.grad(p[B + 1], x - 1, y - 1), u), v);
+  }
+  oct(x, y, n) {
+    let val = 0, amp = 1, freq = 1, max = 0;
+    for (let i = 0; i < n; i++) {
+      val += this.at(x * freq, y * freq) * amp;
+      max += amp; amp *= 0.5; freq *= 2;
+    }
+    return val / max;
+  }
+}
+
+// ── Constants ────────────────────────────────────────────────────────────────
+const W = 100, H = 100, CELL = 6;  // LED grid: 100x100 dots
+const BW = 50, BH = 50;            // Block grid: 50x50 blocks, each 2x2 LEDs
+const PW = W * CELL, PH = H * CELL;
+
+// Block types (coarse 50x50 grid)
+const B_EMPTY = 0, B_WATER = 1, B_ROAD = 2, B_PARK = 3;
+const B_RES = 4, B_COM = 5, B_IND = 6;
+
+// Sub-cell types (fine 100x100 grid) — what each individual LED shows
+const S_EMPTY = 0, S_WATER = 1, S_ROAD = 2;
+const S_PARK = 3, S_COURTYARD = 4, S_FOUNTAIN = 5, S_PATH = 6;
+const S_BUILDING = 7, S_BUILDING_BRIGHT = 8;  // bright = commercial/dense
+
+// ── LED kernel ───────────────────────────────────────────────────────────────
+const kern = new Float32Array(CELL * CELL);
+{ const hk = CELL * 0.5;
+  for (let py = 0; py < CELL; py++)
+    for (let px = 0; px < CELL; px++) {
+      const dx = px - hk + 0.5, dy = py - hk + 0.5;
+      const d = Math.sqrt(dx * dx + dy * dy) / (hk * 0.88);
+      kern[py * CELL + px] = Math.max(0, 1 - d * d);
+    }
+}
+
+// ── Canvas ───────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+canvas.width = PW; canvas.height = PH;
+const ctx = canvas.getContext('2d');
+const imgData = ctx.createImageData(PW, PH);
+const buf = imgData.data;
+
+// ── Presets ───────────────────────────────────────────────────────────────────
+const PRESETS = {
+  river:  { water: 'river', roadStyle: 'organic', growthRate: 4, parkFreq: 0.10, density: 0.70 },
+  sprawl: { water: 'lake',  roadStyle: 'highway', growthRate: 6, parkFreq: 0.05, density: 0.50 },
+};
+
+// ── State ────────────────────────────────────────────────────────────────────
+let blockGrid;      // Uint8Array[BW*BH] — block types
+let blockDensity;   // Float32Array[BW*BH] — 0..1 how built-up
+let ledGrid;        // Uint8Array[W*H] — sub-cell types (what gets rendered)
+let variationMap;   // Float32Array[W*H] — per-LED static randomness
+let growthQueue, growthIdx;
+let rng, noise, noise2;
+let paused = false, speedMult = 0.5, dayPhase = 0, stepAccum = 0;
+let currentPreset = 'river', seed = 1;
+
+function BI(bx, by) { return by * BW + bx; }
+function LI(x, y) { return y * W + x; }
+function bok(bx, by) { return bx >= 0 && bx < BW && by >= 0 && by < BH; }
+function lok(x, y) { return x >= 0 && x < W && y >= 0 && y < H; }
+
+// ── Water generation (operates on block grid) ───────────────────────────────
+
+function generateWater(p) {
+  if (p.water === 'river') {
+    let cx = (rng() * 10 + 20) | 0;  // block coords
+    const w = 1 + (rng() < 0.5 ? 1 : 0);
+    for (let by = 0; by < BH; by++) {
+      cx += ((noise.at(by * 0.14, seed * 0.1) * 2.5) | 0) - 1;
+      cx = Math.max(2, Math.min(BW - 3, cx));
+      for (let dx = -w; dx <= w; dx++) {
+        const rx = cx + dx;
+        if (bok(rx, by)) blockGrid[BI(rx, by)] = B_WATER;
+      }
+    }
+    // Wider bends
+    for (let i = 0; i < 3; i++) {
+      const by = (rng() * BH) | 0;
+      const bx = cx + ((noise.at(by * 0.14, seed * 0.1) * 2.5) | 0) - 1;
+      for (let dy = -2; dy <= 2; dy++)
+        for (let dx = -w - 1; dx <= w + 1; dx++) {
+          const nx = bx + dx, ny = by + dy;
+          if (bok(nx, ny) && dx * dx + dy * dy < (w + 2) * (w + 2))
+            blockGrid[BI(nx, ny)] = B_WATER;
+        }
+    }
+  } else if (p.water === 'lake') {
+    const n = 1 + (rng() < 0.4 ? 1 : 0);
+    for (let l = 0; l < n; l++) {
+      const cx = 10 + (rng() * 30) | 0, cy = 10 + (rng() * 30) | 0;
+      const rx = 3 + (rng() * 5) | 0, ry = 3 + (rng() * 4) | 0;
+      for (let by = cy - ry - 2; by <= cy + ry + 2; by++)
+        for (let bx = cx - rx - 2; bx <= cx + rx + 2; bx++) {
+          if (!bok(bx, by)) continue;
+          const dx = (bx - cx) / rx, dy = (by - cy) / ry;
+          if (dx * dx + dy * dy + noise.at(bx * 0.3, by * 0.3) * 0.3 < 1.0)
+            blockGrid[BI(bx, by)] = B_WATER;
+        }
+    }
+  }
+}
+
+// ── Road generation (operates on block grid) ─────────────────────────────────
+
+function placeRoad(bx, by) {
+  if (bok(bx, by) && blockGrid[BI(bx, by)] === B_EMPTY) blockGrid[BI(bx, by)] = B_ROAD;
+}
+function placeRoadBridge(bx, by) {
+  if (bok(bx, by)) blockGrid[BI(bx, by)] = B_ROAD;
+}
+
+function generateRoads(p) {
+  const style = p.roadStyle;
+
+  if (style === 'highway') {
+    // Major highway corridors
+    const nh = 2 + (rng() < 0.5 ? 1 : 0);
+    for (let i = 0; i < nh; i++) {
+      const by = 6 + ((rng() * (BH - 12)) | 0);
+      for (let bx = 0; bx < BW; bx++) placeRoadBridge(bx, by);
+    }
+    for (let i = 0; i < nh; i++) {
+      const bx = 6 + ((rng() * (BW - 12)) | 0);
+      for (let by = 0; by < BH; by++) placeRoadBridge(bx, by);
+    }
+    // Local grid
+    const sp = 3 + (rng() * 2) | 0;
+    for (let bx = sp; bx < BW - 1; bx += sp)
+      for (let by = 0; by < BH; by++) if (rng() < 0.6) placeRoad(bx, by);
+    for (let by = sp; by < BH - 1; by += sp)
+      for (let bx = 0; bx < BW; bx++) if (rng() < 0.6) placeRoad(bx, by);
+
+  } else { // organic
+    const nm = 3 + (rng() < 0.5 ? 1 : 0);
+    for (let i = 0; i < nm; i++) {
+      let bx = 4 + (rng() * (BW - 8)) | 0;
+      for (let by = 0; by < BH; by++) {
+        bx += ((noise.at(by * 0.2, i * 10 + seed) * 2) | 0);
+        bx = Math.max(1, Math.min(BW - 2, bx));
+        placeRoadBridge(bx, by);
+      }
+    }
+    for (let i = 0; i < nm; i++) {
+      let by = 4 + (rng() * (BH - 8)) | 0;
+      for (let bx = 0; bx < BW; bx++) {
+        by += ((noise.at(bx * 0.2, i * 10 + seed + 100) * 2) | 0);
+        by = Math.max(1, Math.min(BH - 2, by));
+        placeRoadBridge(bx, by);
+      }
+    }
+    // Secondary streets
+    const sp = 3 + (rng() * 2) | 0;
+    for (let bx = sp; bx < BW - 1; bx += sp)
+      for (let by = 0; by < BH; by++) {
+        if (noise2.at(bx * 0.24, by * 0.24) > -0.3 && rng() < 0.7) placeRoad(bx, by);
+      }
+    for (let by = sp; by < BH - 1; by += sp)
+      for (let bx = 0; bx < BW; bx++) {
+        if (noise2.at(bx * 0.24, by * 0.24) > -0.3 && rng() < 0.7) placeRoad(bx, by);
+      }
+  }
+}
+
+// ── Zoning ───────────────────────────────────────────────────────────────────
+
+function nearBlockRoad(bx, by, r) {
+  let best = 99;
+  for (let dy = -r; dy <= r; dy++)
+    for (let dx = -r; dx <= r; dx++) {
+      const d = Math.abs(dx) + Math.abs(dy);
+      if (d < best && bok(bx + dx, by + dy) && blockGrid[BI(bx + dx, by + dy)] === B_ROAD)
+        best = d;
+    }
+  return best;
+}
+
+function nearBlockWater(bx, by) {
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!(dx === 0 && dy === 0) && bok(bx + dx, by + dy) &&
+          blockGrid[BI(bx + dx, by + dy)] === B_WATER) return true;
+    }
+  return false;
+}
+
+function assignZones(p) {
+  blockDensity = new Float32Array(BW * BH);
+  const maxD = Math.sqrt(BW * BW + BH * BH) / 2;
+
+  // City center: centroid of roads, blended toward geometric center
+  let rcx = BW / 2, rcy = BH / 2, rc = 0;
+  for (let by = 0; by < BH; by++)
+    for (let bx = 0; bx < BW; bx++)
+      if (blockGrid[BI(bx, by)] === B_ROAD) { rcx += bx; rcy += by; rc++; }
+  if (rc > 0) { rcx /= rc; rcy /= rc; }
+  rcx = rcx * 0.6 + BW * 0.2;
+  rcy = rcy * 0.6 + BH * 0.2;
+
+  for (let by = 0; by < BH; by++)
+    for (let bx = 0; bx < BW; bx++) {
+      const bi = BI(bx, by);
+      if (blockGrid[bi] !== B_EMPTY) continue;
+      const dRoad = nearBlockRoad(bx, by, 3);
+      if (dRoad > 3) continue;
+
+      const dx = bx - rcx, dy = by - rcy;
+      const dCenter = Math.sqrt(dx * dx + dy * dy) / maxD;
+      const n = noise2.at(bx * 0.16, by * 0.16);
+
+      // Parks near water
+      if (nearBlockWater(bx, by) && rng() < 0.55) { blockGrid[bi] = B_PARK; continue; }
+      // Noise-driven park patches
+      if (n > 0.3 && rng() < p.parkFreq * 3) { blockGrid[bi] = B_PARK; continue; }
+
+      const roadFalloff = Math.max(0.2, 1 - (dRoad - 1) * 0.25);
+
+      if (dCenter < 0.25 && dRoad <= 2) {
+        blockGrid[bi] = B_COM;
+        blockDensity[bi] = (0.7 + rng() * 0.3) * roadFalloff;
+      } else if (dCenter > 0.5 && rng() < 0.4) {
+        blockGrid[bi] = B_IND;
+        blockDensity[bi] = (0.35 + rng() * 0.4) * roadFalloff;
+      } else {
+        blockGrid[bi] = B_RES;
+        blockDensity[bi] = (0.3 + (1 - dCenter) * 0.5 + rng() * 0.2) * roadFalloff;
+      }
+      // Scattered commercial along roads
+      if (blockGrid[bi] === B_RES && dRoad <= 1 && rng() < 0.15) {
+        blockGrid[bi] = B_COM;
+        blockDensity[bi] = 0.5 + rng() * 0.3;
+      }
+    }
+}
+
+// ── Sub-cell fill: convert block types into 2x2 LED patterns ─────────────────
+
+function fillSubCells() {
+  // Each block at (bx,by) maps to LEDs at (bx*2, by*2) through (bx*2+1, by*2+1)
+  ledGrid = new Uint8Array(W * H);
+
+  for (let by = 0; by < BH; by++)
+    for (let bx = 0; bx < BW; bx++) {
+      const bi = BI(bx, by);
+      const type = blockGrid[bi];
+      const lx = bx * 2, ly = by * 2;
+
+      if (type === B_EMPTY) {
+        // All 4 sub-cells empty
+        continue;
+      }
+
+      if (type === B_WATER) {
+        for (let dy = 0; dy < 2; dy++)
+          for (let dx = 0; dx < 2; dx++)
+            ledGrid[LI(lx + dx, ly + dy)] = S_WATER;
+        continue;
+      }
+
+      if (type === B_ROAD) {
+        for (let dy = 0; dy < 2; dy++)
+          for (let dx = 0; dx < 2; dx++)
+            ledGrid[LI(lx + dx, ly + dy)] = S_ROAD;
+        continue;
+      }
+
+      if (type === B_PARK) {
+        // Parks: mostly green, sometimes a fountain or path
+        const r = rng();
+        if (r < 0.15) {
+          // Park with fountain (1 blue, 3 green)
+          const fi = (rng() * 4) | 0;
+          for (let i = 0; i < 4; i++) {
+            const dx = i & 1, dy = (i >> 1) & 1;
+            ledGrid[LI(lx + dx, ly + dy)] = (i === fi) ? S_FOUNTAIN : S_PARK;
+          }
+        } else if (r < 0.35) {
+          // Park with path (1 path, 3 green)
+          const pi = (rng() * 4) | 0;
+          for (let i = 0; i < 4; i++) {
+            const dx = i & 1, dy = (i >> 1) & 1;
+            ledGrid[LI(lx + dx, ly + dy)] = (i === pi) ? S_PATH : S_PARK;
+          }
+        } else {
+          // All green
+          for (let dy = 0; dy < 2; dy++)
+            for (let dx = 0; dx < 2; dx++)
+              ledGrid[LI(lx + dx, ly + dy)] = S_PARK;
+        }
+        continue;
+      }
+
+      // Building types: RES, COM, IND
+      // Density determines how many of the 4 sub-cells are buildings
+      const density = blockDensity[bi];
+      // Map density to fill count: 0..0.25 → 1 cell, 0.25..0.5 → 2, 0.5..0.75 → 3, 0.75+ → 4
+      let fillCount;
+      if (density < 0.2)       fillCount = 1;
+      else if (density < 0.45) fillCount = 2;
+      else if (density < 0.72) fillCount = 3;
+      else                     fillCount = 4;
+
+      // Pick which sub-cells are buildings vs. open space
+      // Shuffle the 4 positions deterministically
+      const positions = [0, 1, 2, 3];
+      for (let i = 3; i > 0; i--) {
+        const j = (rng() * (i + 1)) | 0;
+        [positions[i], positions[j]] = [positions[j], positions[i]];
+      }
+
+      const isCom = type === B_COM;
+      for (let i = 0; i < 4; i++) {
+        const pi = positions[i];
+        const dx = pi & 1, dy = (pi >> 1) & 1;
+        const li = LI(lx + dx, ly + dy);
+
+        if (i < fillCount) {
+          // Building sub-cell
+          ledGrid[li] = isCom ? S_BUILDING_BRIGHT : S_BUILDING;
+        } else {
+          // Open space in this block — varies by zone type
+          const openRoll = rng();
+          if (type === B_RES) {
+            // Residential open: courtyard (green), path, or fountain
+            if (openRoll < 0.50) ledGrid[li] = S_COURTYARD;
+            else if (openRoll < 0.75) ledGrid[li] = S_PATH;
+            else if (openRoll < 0.88) ledGrid[li] = S_FOUNTAIN;
+            else ledGrid[li] = S_PARK;
+          } else if (type === B_COM) {
+            // Commercial open: plaza path, fountain
+            if (openRoll < 0.45) ledGrid[li] = S_PATH;
+            else if (openRoll < 0.75) ledGrid[li] = S_FOUNTAIN;
+            else ledGrid[li] = S_COURTYARD;
+          } else {
+            // Industrial open: mostly path/empty
+            if (openRoll < 0.6) ledGrid[li] = S_PATH;
+            else ledGrid[li] = S_EMPTY;
+          }
+        }
+      }
+    }
+}
+
+// ── Growth queue ─────────────────────────────────────────────────────────────
+
+function buildGrowthQueue() {
+  const cells = [];
+  // Grow in block order, but reveal all 4 LEDs of a block at once
+  for (let by = 0; by < BH; by++)
+    for (let bx = 0; bx < BW; bx++) {
+      const bi = BI(bx, by);
+      const type = blockGrid[bi];
+      if (type >= B_PARK) {  // parks and buildings grow in
+        const dx = bx - BW / 2, dy = by - BH / 2;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        cells.push({ bx, by, dist });
+      }
+    }
+  // Inner blocks first, with noise for organic feel
+  cells.sort((a, b) => (a.dist + rng() * 8) - (b.dist + rng() * 8));
+  growthQueue = cells;
+  growthIdx = 0;
+}
+
+// ledGridVisible: what's currently shown (grows in over time)
+let ledGridVisible;
+
+function growStep(n) {
+  for (let i = 0; i < n && growthIdx < growthQueue.length; i++, growthIdx++) {
+    const c = growthQueue[growthIdx];
+    const lx = c.bx * 2, ly = c.by * 2;
+    // Reveal all 4 sub-cells of this block
+    for (let dy = 0; dy < 2; dy++)
+      for (let dx = 0; dx < 2; dx++) {
+        const li = LI(lx + dx, ly + dy);
+        ledGridVisible[li] = ledGrid[li];
+      }
+  }
+}
+
+function growthDone() { return growthIdx >= growthQueue.length; }
+function growthPct() { return growthQueue.length ? (growthIdx / growthQueue.length * 100) | 0 : 100; }
+
+// ── Initialization ───────────────────────────────────────────────────────────
+
+function init() {
+  blockGrid = new Uint8Array(BW * BH);
+  rng = mulberry32(seed);
+  noise = new Noise(seed);
+  noise2 = new Noise(seed + 7777);
+
+  // Build variation map (per-LED static randomness for visual variety)
+  variationMap = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) variationMap[i] = rng();
+
+  const p = PRESETS[currentPreset];
+  generateWater(p);
+  generateRoads(p);
+  assignZones(p);
+  fillSubCells();
+  buildGrowthQueue();
+
+  // Visible grid starts with water and roads pre-placed
+  ledGridVisible = new Uint8Array(W * H);
+  for (let by = 0; by < BH; by++)
+    for (let bx = 0; bx < BW; bx++) {
+      const type = blockGrid[BI(bx, by)];
+      if (type === B_WATER || type === B_ROAD) {
+        const lx = bx * 2, ly = by * 2;
+        for (let dy = 0; dy < 2; dy++)
+          for (let dx = 0; dx < 2; dx++)
+            ledGridVisible[LI(lx + dx, ly + dy)] = ledGrid[LI(lx + dx, ly + dy)];
+      }
+    }
+
+  dayPhase = 0;
+  stepAccum = 0;
+}
+
+// ── Color functions ──────────────────────────────────────────────────────────
+// day: 0 = midnight, 1 = noon.  v: per-cell variation 0–1.  dusk: 0–1.
+
+function colEmpty(day, v, dusk) { return [2, 2, 5]; }
+
+function colWater(day, v, dusk) {
+  const r = (6  + 50 * day + 80 * dusk) | 0;
+  const g = (15 + 70 * day + 25 * dusk) | 0;
+  const b = (50 + 140 * day - 30 * dusk) | 0;
+  const sh = 0.88 + v * 0.24;
+  return [Math.min(255, (r * sh) | 0), Math.min(255, (g * sh) | 0), Math.min(255, (b * sh) | 0)];
+}
+
+function colRoad(day, v, dusk) {
+  if (day < 0.3) {
+    const nightDepth = 1 - day / 0.3;
+    if (v > 0.65) {
+      const f = 0.5 + 0.5 * nightDepth;
+      return [(50 + 60 * f) | 0, (42 + 45 * f) | 0, (15 + 20 * f) | 0];
+    }
+    return [(6 + 20 * day) | 0, (6 + 18 * day) | 0, (8 + 15 * day) | 0];
+  }
+  const base = 30 + 50 * day + 15 * dusk;
+  return [(base) | 0, (base - 2) | 0, (base + 3) | 0];
+}
+
+function colPark(day, v, dusk) {
+  const r = (3  + 55 * day + 20 * dusk) | 0;
+  const g = (10 + 110 * day + v * 20) | 0;
+  const b = (3  + 35 * day) | 0;
+  return [r, g, b];
+}
+
+function colCourtyard(day, v, dusk) {
+  // Slightly different green from park — more manicured, slightly brighter
+  const r = (4  + 45 * day + 18 * dusk) | 0;
+  const g = (12 + 95 * day + v * 15) | 0;
+  const b = (5  + 30 * day) | 0;
+  return [r, g, b];
+}
+
+function colFountain(day, v, dusk) {
+  // Small bright blue accent — visible even at night as a glimmer
+  const nightGlow = day < 0.3 ? (1 - day / 0.3) * 0.3 : 0;
+  const r = (8  + 40 * day + 50 * dusk) | 0;
+  const g = (20 + 80 * day + 15 * dusk + 30 * nightGlow) | 0;
+  const b = (55 + 130 * day + 40 * nightGlow) | 0;
+  const sh = 0.9 + v * 0.2;
+  return [Math.min(255, (r * sh) | 0), Math.min(255, (g * sh) | 0), Math.min(255, (b * sh) | 0)];
+}
+
+function colPath(day, v, dusk) {
+  // Light gray/tan walkway — dimmer than road, warmer
+  if (day < 0.3) {
+    return [(5 + 15 * day) | 0, (5 + 12 * day) | 0, (6 + 10 * day) | 0];
+  }
+  const base = 25 + 45 * day;
+  return [(base + 8) | 0, (base + 4) | 0, (base - 2) | 0];
+}
+
+function colBuilding(day, v, dusk) {
+  // Residential/industrial building — warm amber
+  if (day < 0.25) {
+    const nightDepth = 1 - day / 0.25;
+    // Lit windows: warm amber pinpoints
+    if (v > 0.45) {
+      const bright = (0.3 + v * 0.5) * (0.7 + 0.3 * nightDepth);
+      return [(220 * bright) | 0, (165 * bright) | 0, (60 * bright) | 0];
+    }
+    // Dark
+    return [(4 + 12 * day) | 0, (3 + 10 * day) | 0, (5 + 8 * day) | 0];
+  }
+  const duskBoost = dusk * 40;
+  const f = 0.6 + v * 0.3;
+  return [
+    Math.min(255, (80 + 140 * day * f + duskBoost) | 0),
+    Math.min(255, (60 + 100 * day * f + duskBoost * 0.4) | 0),
+    Math.min(255, (35 + 55 * day * f) | 0),
+  ];
+}
+
+function colBuildingBright(day, v, dusk) {
+  // Commercial — stays lit at night, brighter during day
+  if (day < 0.25) {
+    const bright = 0.4 + v * 0.35;
+    if (v > 0.85) {
+      // Neon sign accent
+      return [
+        Math.min(255, (180 * bright) | 0),
+        Math.min(255, (200 * bright) | 0),
+        Math.min(255, (255 * bright) | 0),
+      ];
+    }
+    return [
+      Math.min(255, (255 * bright) | 0),
+      Math.min(255, (220 * bright) | 0),
+      Math.min(255, (140 * bright) | 0),
+    ];
+  }
+  const f = 0.65 + v * 0.25;
+  const sign = v > 0.8 ? 1.2 : 1.0;
+  return [
+    Math.min(255, (160 + 95 * day * f * sign + dusk * 30) | 0),
+    Math.min(255, (150 + 90 * day * f * sign + dusk * 15) | 0),
+    Math.min(255, (120 + 60 * day * f * sign) | 0),
+  ];
+}
+
+const COL_FN = [
+  colEmpty,           // 0 S_EMPTY
+  colWater,           // 1 S_WATER
+  colRoad,            // 2 S_ROAD
+  colPark,            // 3 S_PARK
+  colCourtyard,       // 4 S_COURTYARD
+  colFountain,        // 5 S_FOUNTAIN
+  colPath,            // 6 S_PATH
+  colBuilding,        // 7 S_BUILDING
+  colBuildingBright,  // 8 S_BUILDING_BRIGHT
+];
+
+// ── Render ───────────────────────────────────────────────────────────────────
+
+function render() {
+  const raw = Math.cos(dayPhase * Math.PI * 2);
+  const day = Math.max(0, Math.pow(Math.max(0, raw), 0.6));
+
+  const dusk = Math.max(
+    Math.max(0, 1 - Math.abs(dayPhase - 0.22) * 8),
+    Math.max(0, 1 - Math.abs(dayPhase - 0.78) * 8)
+  );
+
+  const ambR = 1 + 4 * day + 6 * dusk;
+  const ambG = 1 + 3 * day + 2 * dusk;
+  const ambB = 3 + 2 * day + 5 * (1 - day) * (1 - dusk);
+
+  buf.fill(0);
+
+  for (let cy = 0; cy < H; cy++) {
+    for (let cx = 0; cx < W; cx++) {
+      const ci = LI(cx, cy);
+      const type = ledGridVisible[ci];
+      const v = variationMap[ci];
+
+      const [r, g, b] = COL_FN[type](day, v, dusk);
+
+      const ox = cx * CELL, oy = cy * CELL;
+      for (let py = 0; py < CELL; py++) {
+        const rowOff = (oy + py) * PW + ox;
+        for (let px = 0; px < CELL; px++) {
+          const k = kern[py * CELL + px];
+          const pi = (rowOff + px) * 4;
+          buf[pi]     = Math.min(255, (r * k + ambR * (1 - k)) | 0);
+          buf[pi + 1] = Math.min(255, (g * k + ambG * (1 - k)) | 0);
+          buf[pi + 2] = Math.min(255, (b * k + ambB * (1 - k)) | 0);
+          buf[pi + 3] = 255;
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+}
+
+// ── Main loop ────────────────────────────────────────────────────────────────
+
+const DAY_SPEED = 0.0004;
+
+function tick() {
+  if (!paused) {
+    const spd = speedMult;
+    if (!growthDone()) {
+      stepAccum += PRESETS[currentPreset].growthRate * spd;
+      const steps = stepAccum | 0;
+      if (steps > 0) { growStep(steps); stepAccum -= steps; }
+    }
+    dayPhase = (dayPhase + DAY_SPEED * spd) % 1;
+  }
+  render();
+  updateInfo();
+  requestAnimationFrame(tick);
+}
+
+// ── UI ───────────────────────────────────────────────────────────────────────
+
+function updateInfo() {
+  const el = document.getElementById('infoLabel');
+  if (!growthDone()) {
+    el.textContent = 'building ' + growthPct() + '%';
+  } else {
+    const names = ['midday', 'afternoon', 'evening', 'night', 'night', 'dawn', 'morning', 'midday'];
+    const idx = (dayPhase * names.length) | 0;
+    el.textContent = names[idx];
+  }
+}
+
+document.getElementById('preset').addEventListener('change', e => {
+  currentPreset = e.target.value;
+  seed = (Math.random() * 999999 + 1) | 0;
+  init();
+});
+
+document.getElementById('speed').addEventListener('input', e => {
+  speedMult = e.target.value / 100;
+  document.getElementById('speedLabel').textContent = e.target.value + '%';
+});
+
+document.getElementById('btn').addEventListener('click', () => {
+  seed = (Math.random() * 999999 + 1) | 0;
+  init();
+});
+
+document.getElementById('pauseBtn').addEventListener('click', () => {
+  paused = !paused;
+  const btn = document.getElementById('pauseBtn');
+  btn.textContent = paused ? '\u25B6' : '\u23F8';
+  btn.classList.toggle('active', paused);
+});
+
+// ── Start ────────────────────────────────────────────────────────────────────
+seed = (Math.random() * 999999 + 1) | 0;
+init();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
