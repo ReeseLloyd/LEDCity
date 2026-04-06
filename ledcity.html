@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEDCity v0.2</title>
+<title>LEDCity v0.3</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -554,9 +554,10 @@ function init() {
 function colEmpty(day, v, dusk) { return [2, 2, 5]; }
 
 function colWater(day, v, dusk) {
-  const r = (6  + 50 * day + 110 * dusk) | 0;
-  const g = (15 + 70 * day + 30 * dusk) | 0;
-  const b = (50 + 140 * day - 50 * dusk) | 0;
+  // Stay blue throughout -- darken at night, subtle warm reflection at dusk
+  const r = (6  + 45 * day + 20 * dusk) | 0;
+  const g = (15 + 65 * day + 10 * dusk) | 0;
+  const b = (50 + 140 * day) | 0;
   const sh = 0.88 + v * 0.24;
   return [Math.min(255, (r * sh) | 0), Math.min(255, (g * sh) | 0), Math.min(255, (b * sh) | 0)];
 }
