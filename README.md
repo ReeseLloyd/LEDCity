@@ -2,7 +2,7 @@
 
 Procedurally generated top-down cityscapes rendered as glowing LED dot-matrix displays. Cities grow outward from a nucleus, filling in with buildings, parks, water, and roads, then settle into a continuous day/night cycle.
 
-**Version 0.6**
+**Version 0.7**
 
 ## Getting Started
 
@@ -50,7 +50,7 @@ Open spaces within blocks become:
 The city transitions through a full day/night cycle with dramatic lighting changes:
 - **Day**: bright sunlit buildings, lush green parks, vivid blue water
 - **Dusk/Dawn**: warm golden hour wash across the city, orange-pink reflections on water
-- **Night**: dark city with scattered amber window lights, brightly-lit commercial downtown, streetlights on roads, fountain glimmers
+- **Night**: dark city with scattered amber window lights, brightly-lit commercial downtown, vehicle headlights/taillights on dark roads, fountain glimmers
 
 ## Version History
 
@@ -62,3 +62,4 @@ The city transitions through a full day/night cycle with dramatic lighting chang
 | **0.4** | Variable river orientation and width, pruned floating road segments, double-width highways, reduced Sprawl road density, mixed-use city core |
 | **0.5** | Removed road streetlights at night so roads read as dark channels between lit buildings |
 | **0.6** | Reduced daytime road brightness by 30% for more contrast with surroundings |
+| **0.7** | Vehicle traffic: cars and trucks with headlights/taillights, highway speed detection, time-of-day density scaling |

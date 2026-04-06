@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEDCity v0.6</title>
+<title>LEDCity v0.7</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -180,6 +180,11 @@ let growthQueue, growthIdx;
 let rng, noise, noise2;
 let paused = false, speedMult = 0.5, dayPhase = 0, stepAccum = 0;
 let currentPreset = 'river', seed = 1;
+
+// ── Vehicles ────────────────────────────────────────────────────────────────
+let vehicles = [];
+const DIR_DX = [0, 1, 0, -1];  // N, E, S, W
+const DIR_DY = [-1, 0, 1, 0];
 
 function BI(bx, by) { return by * BW + bx; }
 function LI(x, y) { return y * W + x; }
@@ -614,6 +619,7 @@ function init() {
 
   dayPhase = 0;
   stepAccum = 0;
+  vehicles = [];
 }
 
 // ── Color functions ──────────────────────────────────────────────────────────
@@ -735,6 +741,170 @@ const COL_FN = [
   colBuildingBright,  // 8 S_BUILDING_BRIGHT
 ];
 
+// ── Vehicles ─────────────────────────────────────────────────────────────────
+
+function isRoad(x, y) {
+  return lok(x, y) && ledGrid[LI(x, y)] === S_ROAD;
+}
+
+function isHighway(x, y) {
+  if (!isRoad(x, y)) return false;
+  // Highway = wide corridor: both perpendicular neighbors are also road
+  return (isRoad(x - 1, y) && isRoad(x + 1, y)) ||
+         (isRoad(x, y - 1) && isRoad(x, y + 1));
+}
+
+function vehicleTargetCount(day, dusk) {
+  if (dusk > 0.3) return 35 + (dusk * 15) | 0;  // rush hour
+  if (day > 0.5) return 20 + (day * 10) | 0;     // daytime
+  if (day > 0.15) return 15;                       // dim periods
+  return 10;                                       // deep night
+}
+
+function spawnVehicle() {
+  // Collect edge road cells
+  const edges = [];
+  for (let x = 0; x < W; x++) {
+    if (isRoad(x, 0))     edges.push({ x, y: 0,     dir: 2 }); // top edge, go S
+    if (isRoad(x, H - 1)) edges.push({ x, y: H - 1, dir: 0 }); // bottom edge, go N
+  }
+  for (let y = 0; y < H; y++) {
+    if (isRoad(0, y))     edges.push({ x: 0,     y, dir: 1 }); // left edge, go E
+    if (isRoad(W - 1, y)) edges.push({ x: W - 1, y, dir: 3 }); // right edge, go W
+  }
+  if (edges.length === 0) return;
+
+  const e = edges[(Math.random() * edges.length) | 0];
+  const isTruck = Math.random() < 0.15;
+  const hw = isHighway(e.x, e.y);
+  vehicles.push({
+    x: e.x, y: e.y,
+    dir: e.dir,
+    type: isTruck ? 1 : 0,
+    speed: hw ? 3 : (4 + (Math.random() * 4) | 0),
+    tick: 0,
+    color: Math.random() < 0.03 ? 2 : (Math.random() < 0.5 ? 0 : 1), // 0=white, 1=amber, 2=blue
+  });
+}
+
+function moveVehicle(v) {
+  const nx = v.x + DIR_DX[v.dir];
+  const ny = v.y + DIR_DY[v.dir];
+
+  // Off grid = despawn
+  if (!lok(nx, ny)) return false;
+
+  // Can continue straight?
+  if (isRoad(nx, ny)) {
+    // At intersections, chance to turn
+    const leftDir = (v.dir + 3) & 3;
+    const rightDir = (v.dir + 1) & 3;
+    const canLeft = isRoad(v.x + DIR_DX[leftDir], v.y + DIR_DY[leftDir]);
+    const canRight = isRoad(v.x + DIR_DX[rightDir], v.y + DIR_DY[rightDir]);
+
+    if ((canLeft || canRight) && Math.random() < 0.25) {
+      // Turn at intersection
+      if (canLeft && canRight) {
+        v.dir = Math.random() < 0.5 ? leftDir : rightDir;
+      } else {
+        v.dir = canLeft ? leftDir : rightDir;
+      }
+    }
+
+    v.x = v.x + DIR_DX[v.dir];
+    v.y = v.y + DIR_DY[v.dir];
+
+    // Update speed based on road type
+    v.speed = isHighway(v.x, v.y) ? 3 : Math.max(4, v.speed);
+    return true;
+  }
+
+  // Blocked -- try turning
+  const leftDir = (v.dir + 3) & 3;
+  const rightDir = (v.dir + 1) & 3;
+  const canLeft = isRoad(v.x + DIR_DX[leftDir], v.y + DIR_DY[leftDir]);
+  const canRight = isRoad(v.x + DIR_DX[rightDir], v.y + DIR_DY[rightDir]);
+
+  if (canLeft && canRight) {
+    v.dir = Math.random() < 0.5 ? leftDir : rightDir;
+  } else if (canLeft) {
+    v.dir = leftDir;
+  } else if (canRight) {
+    v.dir = rightDir;
+  } else {
+    return false; // dead end, despawn
+  }
+
+  v.x += DIR_DX[v.dir];
+  v.y += DIR_DY[v.dir];
+  return true;
+}
+
+function updateVehicles(day, dusk) {
+  const target = vehicleTargetCount(day, dusk);
+
+  // Spawn new vehicles toward target
+  if (vehicles.length < target && Math.random() < 0.3) {
+    spawnVehicle();
+  }
+
+  // Update existing vehicles
+  for (let i = vehicles.length - 1; i >= 0; i--) {
+    const v = vehicles[i];
+    v.tick++;
+    if (v.tick >= v.speed) {
+      v.tick = 0;
+      if (!moveVehicle(v)) {
+        vehicles.splice(i, 1); // despawn
+      }
+    }
+  }
+}
+
+function vehicleColor(v, day) {
+  const night = day < 0.3 ? 1 - day / 0.3 : 0;
+  const bright = 0.4 + 0.6 * night; // brighter at night
+
+  // Emergency vehicle
+  if (v.color === 2) {
+    return { head: [40 + 180 * bright | 0, 60 + 140 * bright | 0, 180 + 75 * bright | 0],
+             tail: [40 + 180 * bright | 0, 60 + 140 * bright | 0, 180 + 75 * bright | 0] };
+  }
+
+  // Headlight colors
+  let hr, hg, hb;
+  if (v.color === 0) { // warm white
+    hr = 200 + 55 * bright | 0; hg = 190 + 50 * bright | 0; hb = 140 + 40 * bright | 0;
+  } else { // amber
+    hr = 220 + 35 * bright | 0; hg = 170 + 40 * bright | 0; hb = 80 + 30 * bright | 0;
+  }
+
+  // Taillight: red
+  const tr = 180 + 70 * bright | 0;
+  const tg = 20 + 15 * bright | 0;
+  const tb = 10 + 10 * bright | 0;
+
+  return {
+    head: [Math.min(255, hr), Math.min(255, hg), Math.min(255, hb)],
+    tail: [Math.min(255, tr), Math.min(255, tg), Math.min(255, tb)],
+  };
+}
+
+function renderVehicleLED(x, y, r, g, b, ambR, ambG, ambB) {
+  if (!lok(x, y)) return;
+  const ox = x * CELL, oy = y * CELL;
+  for (let py = 0; py < CELL; py++) {
+    const rowOff = (oy + py) * PW + ox;
+    for (let px = 0; px < CELL; px++) {
+      const k = kern[py * CELL + px];
+      const pi = (rowOff + px) * 4;
+      buf[pi]     = Math.min(255, (r * k + ambR * (1 - k)) | 0);
+      buf[pi + 1] = Math.min(255, (g * k + ambG * (1 - k)) | 0);
+      buf[pi + 2] = Math.min(255, (b * k + ambB * (1 - k)) | 0);
+    }
+  }
+}
+
 // ── Render ───────────────────────────────────────────────────────────────────
 
 function render() {
@@ -775,6 +945,25 @@ function render() {
     }
   }
 
+  // Render vehicles on top
+  for (let i = 0; i < vehicles.length; i++) {
+    const v = vehicles[i];
+    const col = vehicleColor(v, day);
+    const headingAway = v.dir === 0 || v.dir === 3; // N or W = taillights visible
+
+    if (v.type === 0) {
+      // Car: single LED
+      const c = headingAway ? col.tail : col.head;
+      renderVehicleLED(v.x, v.y, c[0], c[1], c[2], ambR, ambG, ambB);
+    } else {
+      // Truck: front LED = headlight, back LED = taillight
+      const bx = v.x - DIR_DX[v.dir]; // back position
+      const by = v.y - DIR_DY[v.dir];
+      renderVehicleLED(v.x, v.y, col.head[0], col.head[1], col.head[2], ambR, ambG, ambB);
+      renderVehicleLED(bx, by, col.tail[0], col.tail[1], col.tail[2], ambR, ambG, ambB);
+    }
+  }
+
   ctx.putImageData(imgData, 0, 0);
 }
 
@@ -791,6 +980,17 @@ function tick() {
       if (steps > 0) { growStep(steps); stepAccum -= steps; }
     }
     dayPhase = (dayPhase + DAY_SPEED * spd) % 1;
+
+    // Update vehicles after city is built
+    if (growthDone()) {
+      const raw = Math.cos(dayPhase * Math.PI * 2);
+      const dayVal = Math.max(0, Math.pow(Math.max(0, raw), 0.6));
+      const duskVal = Math.max(
+        Math.max(0, 1 - Math.abs(dayPhase - 0.22) * 5.5),
+        Math.max(0, 1 - Math.abs(dayPhase - 0.78) * 5.5)
+      );
+      updateVehicles(dayVal, duskVal);
+    }
   }
   render();
   updateInfo();
