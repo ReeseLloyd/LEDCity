@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEDCity v0.4</title>
+<title>LEDCity v0.5</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -632,11 +632,7 @@ function colWater(day, v, dusk) {
 
 function colRoad(day, v, dusk) {
   if (day < 0.3) {
-    const nightDepth = 1 - day / 0.3;
-    if (v > 0.65) {
-      const f = 0.5 + 0.5 * nightDepth;
-      return [(50 + 60 * f) | 0, (42 + 45 * f) | 0, (15 + 20 * f) | 0];
-    }
+    // Dark pavement at night -- no streetlights (vehicles will provide light)
     return [(6 + 20 * day) | 0, (6 + 18 * day) | 0, (8 + 15 * day) | 0];
   }
   // Cooler gray to separate from warm buildings
