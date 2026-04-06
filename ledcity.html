@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEDCity v0.3</title>
+<title>LEDCity v0.4</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -190,25 +190,37 @@ function lok(x, y) { return x >= 0 && x < W && y >= 0 && y < H; }
 
 function generateWater(p) {
   if (p.water === 'river') {
-    let cx = (rng() * 10 + 20) | 0;  // block coords
-    const w = 1 + (rng() < 0.5 ? 1 : 0);
-    for (let by = 0; by < BH; by++) {
-      cx += ((noise.at(by * 0.14, seed * 0.1) * 2.5) | 0) - 1;
-      cx = Math.max(2, Math.min(BW - 3, cx));
-      for (let dx = -w; dx <= w; dx++) {
-        const rx = cx + dx;
-        if (bok(rx, by)) blockGrid[BI(rx, by)] = B_WATER;
+    // River can flow in any orientation
+    const horiz = rng() < 0.5;  // horizontal or vertical
+    const len = horiz ? BW : BH;
+    const span = horiz ? BH : BW;
+    // Starting position: wide range across the perpendicular axis
+    let cp = (5 + rng() * (span - 10)) | 0;
+    // Width: 1-3 blocks, weighted toward 2
+    const wr = rng();
+    const w = wr < 0.25 ? 1 : (wr < 0.8 ? 2 : 3);
+    // Meander along the length
+    for (let i = 0; i < len; i++) {
+      cp += ((noise.at(i * 0.18, seed * 0.1) * 3.5) | 0) - 1;
+      cp = Math.max(w + 1, Math.min(span - w - 2, cp));
+      for (let dw = -w; dw <= w; dw++) {
+        const bx = horiz ? i : cp + dw;
+        const by = horiz ? cp + dw : i;
+        if (bok(bx, by)) blockGrid[BI(bx, by)] = B_WATER;
       }
     }
-    // Wider bends
-    for (let i = 0; i < 3; i++) {
-      const by = (rng() * BH) | 0;
-      const bx = cx + ((noise.at(by * 0.14, seed * 0.1) * 2.5) | 0) - 1;
-      for (let dy = -2; dy <= 2; dy++)
-        for (let dx = -w - 1; dx <= w + 1; dx++) {
-          const nx = bx + dx, ny = by + dy;
-          if (bok(nx, ny) && dx * dx + dy * dy < (w + 2) * (w + 2))
-            blockGrid[BI(nx, ny)] = B_WATER;
+    // Wider bends -- scale count with river width
+    const nBends = 2 + w + ((rng() * 2) | 0);
+    for (let i = 0; i < nBends; i++) {
+      const along = (rng() * len) | 0;
+      const across = cp + ((noise.at(along * 0.18, seed * 0.1) * 3.5) | 0) - 1;
+      const br = w + 1;
+      for (let da = -br; da <= br; da++)
+        for (let dw = -br; dw <= br; dw++) {
+          if (da * da + dw * dw > br * br) continue;
+          const bx = horiz ? along + da : across + dw;
+          const by = horiz ? across + dw : along + da;
+          if (bok(bx, by)) blockGrid[BI(bx, by)] = B_WATER;
         }
     }
   } else if (p.water === 'lake') {
@@ -240,22 +252,22 @@ function generateRoads(p) {
   const style = p.roadStyle;
 
   if (style === 'highway') {
-    // Major highway corridors
+    // Major highway corridors -- double width
     const nh = 2 + (rng() < 0.5 ? 1 : 0);
     for (let i = 0; i < nh; i++) {
-      const by = 6 + ((rng() * (BH - 12)) | 0);
-      for (let bx = 0; bx < BW; bx++) placeRoadBridge(bx, by);
+      const by = 6 + ((rng() * (BH - 14)) | 0);
+      for (let bx = 0; bx < BW; bx++) { placeRoadBridge(bx, by); placeRoadBridge(bx, by + 1); }
     }
     for (let i = 0; i < nh; i++) {
-      const bx = 6 + ((rng() * (BW - 12)) | 0);
-      for (let by = 0; by < BH; by++) placeRoadBridge(bx, by);
+      const bx = 6 + ((rng() * (BW - 14)) | 0);
+      for (let by = 0; by < BH; by++) { placeRoadBridge(bx, by); placeRoadBridge(bx + 1, by); }
     }
-    // Local grid
+    // Local grid -- reduced density
     const sp = 3 + (rng() * 2) | 0;
     for (let bx = sp; bx < BW - 1; bx += sp)
-      for (let by = 0; by < BH; by++) if (rng() < 0.6) placeRoad(bx, by);
+      for (let by = 0; by < BH; by++) if (rng() < 0.45) placeRoad(bx, by);
     for (let by = sp; by < BH - 1; by += sp)
-      for (let bx = 0; bx < BW; bx++) if (rng() < 0.6) placeRoad(bx, by);
+      for (let bx = 0; bx < BW; bx++) if (rng() < 0.45) placeRoad(bx, by);
 
   } else { // organic
     const nm = 3 + (rng() < 0.5 ? 1 : 0);
@@ -285,6 +297,48 @@ function generateRoads(p) {
       for (let bx = 0; bx < BW; bx++) {
         if (noise2.at(bx * 0.24, by * 0.24) > -0.3 && rng() < 0.7) placeRoad(bx, by);
       }
+  }
+}
+
+// ── Prune floating roads ─────────────────────────────────────────────────────
+
+function pruneFloatingRoads() {
+  // Label connected components using 8-connectivity (diagonals count at crossings)
+  const label = new Int16Array(BW * BH);
+  label.fill(-1);
+  const sizes = [];
+  let nextLabel = 0;
+
+  for (let i = 0; i < BW * BH; i++) {
+    if (blockGrid[i] !== B_ROAD || label[i] >= 0) continue;
+    // BFS from this unlabeled road block
+    const L = nextLabel++;
+    const queue = [i];
+    label[i] = L;
+    let size = 0;
+    while (queue.length > 0) {
+      const ci = queue.shift();
+      size++;
+      const cx = ci % BW, cy = (ci / BW) | 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = cx + dx, ny = cy + dy;
+          if (!bok(nx, ny)) continue;
+          const ni = BI(nx, ny);
+          if (blockGrid[ni] === B_ROAD && label[ni] < 0) {
+            label[ni] = L;
+            queue.push(ni);
+          }
+        }
+    }
+    sizes.push(size);
+  }
+
+  // Remove components smaller than 4 blocks (true floaters)
+  for (let i = 0; i < BW * BH; i++) {
+    if (blockGrid[i] === B_ROAD && label[i] >= 0 && sizes[label[i]] < 4)
+      blockGrid[i] = B_EMPTY;
   }
 }
 
@@ -345,8 +399,21 @@ function assignZones(p) {
       const pDensity = p.density;  // preset density multiplier
 
       if (dCenter < 0.25 && dRoad <= 2) {
-        blockGrid[bi] = B_COM;
-        blockDensity[bi] = (0.7 + rng() * 0.3) * roadFalloff * pDensity / 0.7;
+        // Core zone: mostly commercial but with variation
+        const coreNoise = noise.at(bx * 0.3, by * 0.3);
+        if (coreNoise > 0.35 && rng() < 0.15) {
+          // Small parks/plazas within the core
+          blockGrid[bi] = B_PARK;
+          continue;
+        } else if (coreNoise < -0.2 && rng() < 0.25) {
+          // High-density residential mixed in
+          blockGrid[bi] = B_RES;
+          blockDensity[bi] = (0.55 + rng() * 0.35) * roadFalloff * pDensity;
+        } else {
+          blockGrid[bi] = B_COM;
+          // Wider density range for more texture
+          blockDensity[bi] = (0.45 + rng() * 0.55) * roadFalloff * pDensity / 0.7;
+        }
       } else if (dCenter > 0.5 && rng() < 0.4) {
         blockGrid[bi] = B_IND;
         blockDensity[bi] = (0.25 + rng() * 0.35) * roadFalloff * pDensity;
@@ -527,6 +594,7 @@ function init() {
   const p = PRESETS[currentPreset];
   generateWater(p);
   generateRoads(p);
+  pruneFloatingRoads();
   assignZones(p);
   fillSubCells();
   buildGrowthQueue();
